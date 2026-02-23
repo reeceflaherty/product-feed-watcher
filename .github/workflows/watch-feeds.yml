@@ -2,7 +2,12 @@ name: Watch product feeds
 
 on:
   schedule:
-    - cron: "*/10 * * * *" # every 10 minutes
+    # Winter months (GMT): 09:00 and 15:00 UTC on weekdays
+    - cron: "0 9,15 * 11,12,1,2 1-5"
+    # Summer months (BST): 08:00 and 14:00 UTC on weekdays
+    - cron: "0 8,14 * 4,5,6,7,8,9 1-5"
+    # DST transition months (Mar/Oct): trigger both sets, then guard by UK local time
+    - cron: "0 8,9,14,15 * 3,10 1-5"
   workflow_dispatch: {}
 
 permissions:
@@ -28,6 +33,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run watcher
+        shell: bash
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -37,7 +43,27 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           FEED_URLS: ${{ secrets.FEED_URLS }}
           BOOTSTRAP_ON_EMPTY_STATE: "true"
-        run: python rss_product_watcher.py
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "Manual run detected; bypassing UK time guard for testing."
+            python rss_product_watcher.py
+            exit 0
+          fi
+
+          UK_HOUR="$(TZ=Europe/London date +%H)"
+          UK_WEEKDAY="$(TZ=Europe/London date +%u)"
+
+          if [[ "$UK_WEEKDAY" -gt 5 ]]; then
+            echo "Skipping: not a UK weekday."
+            exit 0
+          fi
+
+          if [[ "$UK_HOUR" != "09" && "$UK_HOUR" != "15" ]]; then
+            echo "Skipping: current UK hour is ${UK_HOUR}, target hours are 09 and 15."
+            exit 0
+          fi
+
+          python rss_product_watcher.py
 
       - name: Commit updated state file (if changed)
         run: |
